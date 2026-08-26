@@ -10,7 +10,7 @@ type ChatMessage = {
 const WELCOME_MESSAGE: ChatMessage = {
   role: "assistant",
   content:
-    "Hi! I'm the Foodly support assistant. Ask me about ordering, delivery, refunds, accounts, or anything else in our customer policies.",
+    "Hey there! I'm Sam from Foodly support 👋 Ask me anything about ordering, delivery, refunds, or your account — happy to help.",
 };
 
 export default function ChatWidget() {
