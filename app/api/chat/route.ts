@@ -49,7 +49,7 @@ function isChatMessage(value: unknown): value is ChatMessage {
 }
 
 export async function POST(request: Request) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
     return Response.json(
       { error: "Chat is not configured. Missing ANTHROPIC_API_KEY." },
