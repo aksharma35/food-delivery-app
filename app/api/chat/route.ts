@@ -1,10 +1,26 @@
 import fs from "fs";
 import path from "path";
 import Anthropic from "@anthropic-ai/sdk";
+import { getLangfuseClient } from "../../lib/langfuse";
 
 export const runtime = "nodejs";
 
 const POLICIES_PATH = path.join(process.cwd(), "docs", "policies.md");
+
+const MODEL_ID = "claude-opus-5";
+
+// Anthropic list pricing for claude-opus-5, in USD per token (list price is
+// per million tokens). Cache write/read multipliers are Anthropic's standard
+// rates for the default 5-minute ephemeral cache. No cache_control is set on
+// this request yet, so cache_creation/cache_read tokens are currently always
+// 0 — these are wired in now so cost tracking is already correct once
+// caching is turned on.
+const PRICE_PER_TOKEN_USD = {
+  input: 5 / 1_000_000,
+  output: 25 / 1_000_000,
+  cacheWrite5m: (5 * 1.25) / 1_000_000,
+  cacheRead: (5 * 0.1) / 1_000_000,
+};
 
 const NOT_COVERED_REPLY =
   "That is not covered here, please contact support at support@foodly.com.";
@@ -87,12 +103,27 @@ export async function POST(request: Request) {
   }
 
   const client = new Anthropic({ apiKey });
+  const systemPrompt = buildSystemPrompt(policyDocument);
+
+  const langfuse = getLangfuseClient();
+  const trace = langfuse?.trace({
+    name: "foodly-support-chat",
+    input: messages,
+    metadata: { policyDocumentChars: policyDocument.length },
+    tags: ["foodly-chat-widget"],
+  });
+  const generation = trace?.generation({
+    name: "anthropic-chat-completion",
+    model: MODEL_ID,
+    modelParameters: { max_tokens: 1024 },
+    input: [{ role: "system", content: systemPrompt }, ...messages],
+  });
 
   try {
     const response = await client.messages.create({
-      model: "claude-opus-5",
+      model: MODEL_ID,
       max_tokens: 1024,
-      system: buildSystemPrompt(policyDocument),
+      system: systemPrompt,
       messages,
     });
 
@@ -102,9 +133,41 @@ export async function POST(request: Request) {
       .join("\n")
       .trim();
 
+    const usage = response.usage;
+    const cacheCreationTokens = usage.cache_creation_input_tokens ?? 0;
+    const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+    const cost = {
+      input: usage.input_tokens * PRICE_PER_TOKEN_USD.input,
+      output: usage.output_tokens * PRICE_PER_TOKEN_USD.output,
+      cache_creation_input_tokens: cacheCreationTokens * PRICE_PER_TOKEN_USD.cacheWrite5m,
+      cache_read_input_tokens: cacheReadTokens * PRICE_PER_TOKEN_USD.cacheRead,
+    };
+
+    generation?.end({
+      output: reply,
+      usageDetails: {
+        input: usage.input_tokens,
+        output: usage.output_tokens,
+        cache_creation_input_tokens: cacheCreationTokens,
+        cache_read_input_tokens: cacheReadTokens,
+        total: usage.input_tokens + usage.output_tokens + cacheCreationTokens + cacheReadTokens,
+      },
+      costDetails: {
+        ...cost,
+        total: cost.input + cost.output + cost.cache_creation_input_tokens + cost.cache_read_input_tokens,
+      },
+    });
+    trace?.update({ output: reply });
+    await langfuse?.flushAsync();
+
     return Response.json({ reply });
   } catch (error) {
     console.error("Anthropic API request failed:", error);
+    generation?.end({
+      level: "ERROR",
+      statusMessage: error instanceof Error ? error.message : String(error),
+    });
+    await langfuse?.flushAsync();
     return Response.json(
       { error: "The chat assistant is temporarily unavailable. Please try again." },
       { status: 502 },
