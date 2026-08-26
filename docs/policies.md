@@ -145,12 +145,3 @@ A: Check it hasn't expired, meets the minimum order value, and is valid for the 
 
 **Q: A courier was rude or unsafe.**
 A: This is always escalated to a human agent immediately — do not resolve with a refund alone.
-
----
-
-## Using this document with a chatbot
-
-- **As a system prompt / RAG source:** Feed each numbered section as a separate chunk (they're self-contained) so retrieval returns focused, accurate context per user question.
-- **For direct Q&A grounding:** The FAQ section is written in question/answer pairs and can be used as-is for intent matching or few-shot examples.
-- **Escalation logic:** Section 13 explicitly marks what the bot should hand off to a human — wire this into your chatbot's escalation rules rather than letting it improvise on safety-critical topics.
-- **Keep it current:** Update the "Last updated" date whenever a policy changes, and re-embed/re-index the document so the chatbot doesn't answer from stale rules.
