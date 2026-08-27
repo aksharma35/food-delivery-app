@@ -118,6 +118,9 @@ export async function POST(request: Request) {
     modelParameters: { max_tokens: 1024 },
     input: [{ role: "system", content: systemPrompt }, ...messages],
   });
+  if (trace) {
+    console.log("Langfuse trace URL (open this directly to confirm ingestion):", trace.getTraceUrl());
+  }
 
   try {
     const response = await client.messages.create({
@@ -176,10 +179,16 @@ export async function POST(request: Request) {
 }
 
 // Langfuse is observability only — a flush failure (bad keys, network hiccup)
-// must never surface as a chat error to the user.
+// must never surface as a chat error to the user. Note: the Langfuse SDK
+// itself swallows ingestion errors inside flushAsync() and logs them as
+// "[Langfuse SDK] ..." rather than rejecting the promise, so a clean resolve
+// here does not by itself prove the server accepted the batch — watch the
+// terminal for that "[Langfuse SDK]" prefix, not just this function.
 async function flushLangfuse(langfuse: ReturnType<typeof getLangfuseClient>) {
+  if (!langfuse) return;
   try {
-    await langfuse?.flushAsync();
+    await langfuse.flushAsync();
+    console.log("Langfuse flushAsync() resolved (see above for any [Langfuse SDK] errors).");
   } catch (error) {
     console.error("Langfuse flush failed:", error);
   }
