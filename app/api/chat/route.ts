@@ -158,7 +158,7 @@ export async function POST(request: Request) {
       },
     });
     trace?.update({ output: reply });
-    await langfuse?.flushAsync();
+    await flushLangfuse(langfuse);
 
     return Response.json({ reply });
   } catch (error) {
@@ -167,10 +167,20 @@ export async function POST(request: Request) {
       level: "ERROR",
       statusMessage: error instanceof Error ? error.message : String(error),
     });
-    await langfuse?.flushAsync();
+    await flushLangfuse(langfuse);
     return Response.json(
       { error: "The chat assistant is temporarily unavailable. Please try again." },
       { status: 502 },
     );
+  }
+}
+
+// Langfuse is observability only — a flush failure (bad keys, network hiccup)
+// must never surface as a chat error to the user.
+async function flushLangfuse(langfuse: ReturnType<typeof getLangfuseClient>) {
+  try {
+    await langfuse?.flushAsync();
+  } catch (error) {
+    console.error("Langfuse flush failed:", error);
   }
 }

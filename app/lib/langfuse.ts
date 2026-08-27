@@ -10,7 +10,12 @@ let client: Langfuse | undefined;
 export function getLangfuseClient(): Langfuse | null {
   const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
   const secretKey = process.env.LANGFUSE_SECRET_KEY;
-  if (!publicKey || !secretKey) return null;
+  if (!publicKey || !secretKey) {
+    console.warn(
+      "Langfuse tracing disabled: LANGFUSE_PUBLIC_KEY and/or LANGFUSE_SECRET_KEY are not set.",
+    );
+    return null;
+  }
 
   if (!client) {
     client = new Langfuse({
