@@ -1,7 +1,8 @@
 import fs from "fs";
 import path from "path";
 import Anthropic from "@anthropic-ai/sdk";
-import { getLangfuseClient } from "../../lib/langfuse";
+import { propagateAttributes, startActiveObservation } from "@langfuse/tracing";
+import { langfuseSpanProcessor } from "../../../instrumentation";
 
 export const runtime = "nodejs";
 
@@ -105,91 +106,90 @@ export async function POST(request: Request) {
   const client = new Anthropic({ apiKey });
   const systemPrompt = buildSystemPrompt(policyDocument);
 
-  const langfuse = getLangfuseClient();
-  const trace = langfuse?.trace({
-    name: "foodly-support-chat",
-    input: messages,
-    metadata: { policyDocumentChars: policyDocument.length },
-    tags: ["foodly-chat-widget"],
-  });
-  const generation = trace?.generation({
-    name: "anthropic-chat-completion",
-    model: MODEL_ID,
-    modelParameters: { max_tokens: 1024 },
-    input: [{ role: "system", content: systemPrompt }, ...messages],
-  });
-  if (trace) {
-    console.log("Langfuse trace URL (open this directly to confirm ingestion):", trace.getTraceUrl());
-  }
-
   try {
-    const response = await client.messages.create({
-      model: MODEL_ID,
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages,
-    });
-
-    const reply = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("\n")
-      .trim();
-
-    const usage = response.usage;
-    const cacheCreationTokens = usage.cache_creation_input_tokens ?? 0;
-    const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
-    const cost = {
-      input: usage.input_tokens * PRICE_PER_TOKEN_USD.input,
-      output: usage.output_tokens * PRICE_PER_TOKEN_USD.output,
-      cache_creation_input_tokens: cacheCreationTokens * PRICE_PER_TOKEN_USD.cacheWrite5m,
-      cache_read_input_tokens: cacheReadTokens * PRICE_PER_TOKEN_USD.cacheRead,
-    };
-
-    generation?.end({
-      output: reply,
-      usageDetails: {
-        input: usage.input_tokens,
-        output: usage.output_tokens,
-        cache_creation_input_tokens: cacheCreationTokens,
-        cache_read_input_tokens: cacheReadTokens,
-        total: usage.input_tokens + usage.output_tokens + cacheCreationTokens + cacheReadTokens,
+    return await propagateAttributes(
+      {
+        traceName: "foodly-support-chat",
+        tags: ["foodly-chat-widget"],
+        metadata: { policyDocumentChars: String(policyDocument.length) },
       },
-      costDetails: {
-        ...cost,
-        total: cost.input + cost.output + cost.cache_creation_input_tokens + cost.cache_read_input_tokens,
-      },
-    });
-    trace?.update({ output: reply });
-    await flushLangfuse(langfuse);
+      () =>
+        startActiveObservation("foodly-support-chat", async (span) => {
+          span.update({ input: messages });
 
-    return Response.json({ reply });
-  } catch (error) {
-    console.error("Anthropic API request failed:", error);
-    generation?.end({
-      level: "ERROR",
-      statusMessage: error instanceof Error ? error.message : String(error),
-    });
-    await flushLangfuse(langfuse);
-    return Response.json(
-      { error: "The chat assistant is temporarily unavailable. Please try again." },
-      { status: 502 },
+          const generation = span.startObservation(
+            "anthropic-chat-completion",
+            {
+              model: MODEL_ID,
+              modelParameters: { max_tokens: 1024 },
+              input: [{ role: "system", content: systemPrompt }, ...messages],
+            },
+            { asType: "generation" },
+          );
+
+          try {
+            const response = await client.messages.create({
+              model: MODEL_ID,
+              max_tokens: 1024,
+              system: systemPrompt,
+              messages,
+            });
+
+            const reply = response.content
+              .filter((block): block is Anthropic.TextBlock => block.type === "text")
+              .map((block) => block.text)
+              .join("\n")
+              .trim();
+
+            const usage = response.usage;
+            const cacheCreationTokens = usage.cache_creation_input_tokens ?? 0;
+            const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+            const cost = {
+              input: usage.input_tokens * PRICE_PER_TOKEN_USD.input,
+              output: usage.output_tokens * PRICE_PER_TOKEN_USD.output,
+              cache_creation_input_tokens: cacheCreationTokens * PRICE_PER_TOKEN_USD.cacheWrite5m,
+              cache_read_input_tokens: cacheReadTokens * PRICE_PER_TOKEN_USD.cacheRead,
+            };
+
+            generation.update({
+              output: reply,
+              usageDetails: {
+                input: usage.input_tokens,
+                output: usage.output_tokens,
+                cache_creation_input_tokens: cacheCreationTokens,
+                cache_read_input_tokens: cacheReadTokens,
+                total: usage.input_tokens + usage.output_tokens + cacheCreationTokens + cacheReadTokens,
+              },
+              costDetails: {
+                ...cost,
+                total: cost.input + cost.output + cost.cache_creation_input_tokens + cost.cache_read_input_tokens,
+              },
+            });
+            generation.end();
+            span.update({ output: reply });
+
+            return Response.json({ reply });
+          } catch (error) {
+            console.error("Anthropic API request failed:", error);
+            const statusMessage = error instanceof Error ? error.message : String(error);
+            generation.update({ level: "ERROR", statusMessage });
+            generation.end();
+            span.update({ level: "ERROR", statusMessage });
+
+            return Response.json(
+              { error: "The chat assistant is temporarily unavailable. Please try again." },
+              { status: 502 },
+            );
+          }
+        }),
     );
-  }
-}
-
-// Langfuse is observability only — a flush failure (bad keys, network hiccup)
-// must never surface as a chat error to the user. Note: the Langfuse SDK
-// itself swallows ingestion errors inside flushAsync() and logs them as
-// "[Langfuse SDK] ..." rather than rejecting the promise, so a clean resolve
-// here does not by itself prove the server accepted the batch — watch the
-// terminal for that "[Langfuse SDK]" prefix, not just this function.
-async function flushLangfuse(langfuse: ReturnType<typeof getLangfuseClient>) {
-  if (!langfuse) return;
-  try {
-    await langfuse.flushAsync();
-    console.log("Langfuse flushAsync() resolved (see above for any [Langfuse SDK] errors).");
-  } catch (error) {
-    console.error("Langfuse flush failed:", error);
+  } finally {
+    // Langfuse is observability only — a flush failure (bad keys, network
+    // hiccup) must never surface as a chat error to the user.
+    try {
+      await langfuseSpanProcessor?.forceFlush();
+    } catch (error) {
+      console.error("Langfuse flush failed:", error);
+    }
   }
 }
