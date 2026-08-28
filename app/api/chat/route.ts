@@ -8,19 +8,19 @@ export const runtime = "nodejs";
 
 const POLICIES_PATH = path.join(process.cwd(), "docs", "policies.md");
 
-const MODEL_ID = "claude-opus-5";
+const MODEL_ID = "claude-sonnet-5";
 
-// Anthropic list pricing for claude-opus-5, in USD per token (list price is
+// Anthropic list pricing for claude-sonnet-5, in USD per token (list price is
 // per million tokens). Cache write/read multipliers are Anthropic's standard
 // rates for the default 5-minute ephemeral cache. No cache_control is set on
 // this request yet, so cache_creation/cache_read tokens are currently always
 // 0 — these are wired in now so cost tracking is already correct once
 // caching is turned on.
 const PRICE_PER_TOKEN_USD = {
-  input: 5 / 1_000_000,
-  output: 25 / 1_000_000,
-  cacheWrite5m: (5 * 1.25) / 1_000_000,
-  cacheRead: (5 * 0.1) / 1_000_000,
+  input: 2 / 1_000_000,
+  output: 10 / 1_000_000,
+  cacheWrite5m: (2 * 1.25) / 1_000_000,
+  cacheRead: (2 * 0.1) / 1_000_000,
 };
 
 const NOT_COVERED_REPLY =
