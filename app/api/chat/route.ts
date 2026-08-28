@@ -186,8 +186,12 @@ export async function POST(request: Request) {
   } finally {
     // Langfuse is observability only — a flush failure (bad keys, network
     // hiccup) must never surface as a chat error to the user.
+    console.log(
+      `[route] langfuseSpanProcessor is ${langfuseSpanProcessor ? "defined" : "undefined"} in this module instance; flushing...`,
+    );
     try {
       await langfuseSpanProcessor?.forceFlush();
+      console.log("[route] langfuseSpanProcessor.forceFlush() completed.");
     } catch (error) {
       console.error("Langfuse flush failed:", error);
     }
