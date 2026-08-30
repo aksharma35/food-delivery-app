@@ -270,6 +270,9 @@ export default function Home() {
             Foodly
           </a>
           <p>© {new Date().getFullYear()} Foodly. All rights reserved.</p>
+          <a href="/login" className="transition-colors hover:text-foreground">
+            Staff Login
+          </a>
         </div>
       </footer>
     </div>
