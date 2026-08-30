@@ -8,7 +8,7 @@ import { resolveConnectionString } from "../lib/db";
 config({ path: path.join(process.cwd(), ".env.local") });
 config({ path: path.join(process.cwd(), ".env") });
 
-type SeedCustomer = { id: number; name: string; email: string };
+type SeedCustomer = { id: number; name: string; email: string; phone: string };
 type SeedOrder = {
   id: string;
   customerId: number;
@@ -16,12 +16,22 @@ type SeedOrder = {
   items: string;
   totalAmount: number;
 };
+type SeedRefund = {
+  id: number;
+  orderId: string;
+  customerId: number;
+  status: string;
+  reason: string;
+  amount: number;
+};
 
 // Order id '9999' is reserved for the on-camera "order not found" demo and
 // must never exist in this table — see the check after seeding below.
+// Phone numbers double as the demo login: any of these + the fixed
+// FOODLY_DEMO_OTP code logs in as that customer.
 const CUSTOMERS: SeedCustomer[] = [
-  { id: 1, name: "Priya Nair", email: "priya.nair@example.com" },
-  { id: 2, name: "Marcus Lee", email: "marcus.lee@example.com" },
+  { id: 1, name: "Priya Nair", email: "priya.nair@example.com", phone: "+919876543210" },
+  { id: 2, name: "Marcus Lee", email: "marcus.lee@example.com", phone: "+14155550134" },
 ];
 
 const ORDERS: SeedOrder[] = [
@@ -62,6 +72,25 @@ const ORDERS: SeedOrder[] = [
   },
 ];
 
+const REFUNDS: SeedRefund[] = [
+  {
+    id: 1,
+    orderId: "4521",
+    customerId: 1,
+    status: "requested",
+    reason: "Order arrived cold",
+    amount: 18.5,
+  },
+  {
+    id: 2,
+    orderId: "4524",
+    customerId: 2,
+    status: "processed",
+    reason: "Missing item from order",
+    amount: 5.0,
+  },
+];
+
 async function main() {
   const pool = new Pool({ connectionString: resolveConnectionString() });
 
@@ -73,6 +102,13 @@ async function main() {
         email text not null
       );
     `);
+    await pool.query(`alter table customers add column if not exists phone text;`);
+    // Partial index: allows multiple NULLs (pre-migration rows) while still
+    // enforcing uniqueness once a phone is set, since phone doubles as the
+    // demo login lookup key.
+    await pool.query(
+      `create unique index if not exists customers_phone_key on customers (phone) where phone is not null;`,
+    );
 
     await pool.query(`
       create table if not exists orders (
@@ -84,15 +120,27 @@ async function main() {
       );
     `);
 
+    await pool.query(`
+      create table if not exists refunds (
+        id serial primary key,
+        order_id text not null references orders(id),
+        customer_id integer references customers(id),
+        status text not null,
+        reason text,
+        amount numeric not null,
+        created_at timestamptz not null default now()
+      );
+    `);
+
     for (const customer of CUSTOMERS) {
       await pool.query(
-        `insert into customers (id, name, email) values ($1, $2, $3)
-         on conflict (id) do update set name = excluded.name, email = excluded.email`,
-        [customer.id, customer.name, customer.email],
+        `insert into customers (id, name, email, phone) values ($1, $2, $3, $4)
+         on conflict (id) do update set name = excluded.name, email = excluded.email, phone = excluded.phone`,
+        [customer.id, customer.name, customer.email, customer.phone],
       );
     }
 
-    // Keep the id sequence ahead of our explicit ids so any future insert
+    // Keep the id sequences ahead of our explicit ids so any future insert
     // that relies on the default (outside this script) doesn't collide.
     await pool.query(
       `select setval(pg_get_serial_sequence('customers', 'id'), (select max(id) from customers))`,
@@ -113,12 +161,31 @@ async function main() {
       );
     }
 
+    for (const refund of REFUNDS) {
+      await pool.query(
+        `insert into refunds (id, order_id, customer_id, status, reason, amount) values ($1, $2, $3, $4, $5, $6)
+         on conflict (id) do update set
+           order_id = excluded.order_id,
+           customer_id = excluded.customer_id,
+           status = excluded.status,
+           reason = excluded.reason,
+           amount = excluded.amount`,
+        [refund.id, refund.orderId, refund.customerId, refund.status, refund.reason, refund.amount],
+      );
+    }
+
+    await pool.query(
+      `select setval(pg_get_serial_sequence('refunds', 'id'), (select max(id) from refunds))`,
+    );
+
     const reserved = await pool.query("select id from orders where id = '9999'");
     if (reserved.rows.length > 0) {
       throw new Error("Order 9999 exists in the database — it must be removed for the demo.");
     }
 
-    console.log(`Seeded ${CUSTOMERS.length} customers and ${ORDERS.length} orders.`);
+    console.log(
+      `Seeded ${CUSTOMERS.length} customers, ${ORDERS.length} orders, and ${REFUNDS.length} refunds.`,
+    );
   } finally {
     await pool.end();
   }

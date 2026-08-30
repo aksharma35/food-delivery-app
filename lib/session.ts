@@ -5,12 +5,16 @@ export const SESSION_COOKIE_NAME = "foodly_session";
 export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 2; // 2 hours
 
 type SessionPayload = {
-  username: string;
+  customerId: number;
+  phone: string;
+  name: string;
   exp: number; // unix seconds
 };
 
 export type Session = {
-  username: string;
+  customerId: number;
+  phone: string;
+  name: string;
 };
 
 function getSessionSecret(): string {
@@ -26,9 +30,11 @@ function sign(encodedPayload: string): string {
 }
 
 /** Builds a signed session token: base64url(payload) + "." + HMAC signature. */
-export function createSessionToken(username: string): string {
+export function createSessionToken(customer: { id: number; phone: string; name: string }): string {
   const payload: SessionPayload = {
-    username,
+    customerId: customer.id,
+    phone: customer.phone,
+    name: customer.name,
     exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS,
   };
   const encodedPayload = Buffer.from(JSON.stringify(payload), "utf-8").toString("base64url");
@@ -50,7 +56,14 @@ function verifySessionToken(token: string): SessionPayload | null {
 
   try {
     const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf-8")) as SessionPayload;
-    if (typeof payload.username !== "string" || typeof payload.exp !== "number") return null;
+    if (
+      typeof payload.customerId !== "number" ||
+      typeof payload.phone !== "string" ||
+      typeof payload.name !== "string" ||
+      typeof payload.exp !== "number"
+    ) {
+      return null;
+    }
     if (payload.exp < Math.floor(Date.now() / 1000)) return null;
     return payload;
   } catch {
@@ -67,5 +80,5 @@ export async function getSession(): Promise<Session | null> {
   const payload = verifySessionToken(token);
   if (!payload) return null;
 
-  return { username: payload.username };
+  return { customerId: payload.customerId, phone: payload.phone, name: payload.name };
 }

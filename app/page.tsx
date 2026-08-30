@@ -91,7 +91,7 @@ export default function Home() {
             ))}
           </nav>
           <a
-            href="#contact"
+            href="/login"
             className="rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-white shadow-sm shadow-brand/30 transition-colors hover:bg-brand-dark"
           >
             Order Now
@@ -126,7 +126,7 @@ export default function Home() {
             </p>
             <div className="flex flex-col gap-4 sm:flex-row">
               <a
-                href="#contact"
+                href="/login"
                 className="rounded-full bg-brand px-8 py-3.5 text-base font-semibold text-white shadow-lg shadow-brand/30 transition-transform hover:-translate-y-0.5 hover:bg-brand-dark"
               >
                 Order Now
@@ -270,9 +270,6 @@ export default function Home() {
             Foodly
           </a>
           <p>© {new Date().getFullYear()} Foodly. All rights reserved.</p>
-          <a href="/login" className="transition-colors hover:text-foreground">
-            Staff Login
-          </a>
         </div>
       </footer>
     </div>
