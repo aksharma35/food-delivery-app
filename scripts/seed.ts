@@ -63,11 +63,7 @@ const ORDERS: SeedOrder[] = [
 ];
 
 async function main() {
-  const connectionString = resolveConnectionString();
-  const pool = new Pool({
-    connectionString,
-    ssl: connectionString.includes("localhost") ? undefined : { rejectUnauthorized: false },
-  });
+  const pool = new Pool({ connectionString: resolveConnectionString() });
 
   try {
     await pool.query(`
