@@ -25,8 +25,8 @@ type CustomerRow = { id: number; name: string; phone: string };
 
 export async function POST(request: Request) {
   const expectedOtp = process.env.FOODLY_DEMO_OTP;
-  if (!expectedOtp) {
-    console.error("Login is not configured: missing FOODLY_DEMO_OTP.");
+  if (!expectedOtp || !process.env.SESSION_SECRET) {
+    console.error("Login is not configured: missing FOODLY_DEMO_OTP and/or SESSION_SECRET.");
     return Response.json({ error: "Login is not configured." }, { status: 500 });
   }
 
@@ -61,15 +61,20 @@ export async function POST(request: Request) {
     return Response.json({ error: GENERIC_ERROR }, { status: 401 });
   }
 
-  const token = createSessionToken(customer);
-  const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
+  try {
+    const token = createSessionToken(customer);
+    const cookieStore = await cookies();
+    cookieStore.set(SESSION_COOKIE_NAME, token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: SESSION_MAX_AGE_SECONDS,
+    });
+  } catch (error) {
+    console.error("Failed to create session:", error);
+    return Response.json({ error: "Login is temporarily unavailable." }, { status: 500 });
+  }
 
   return Response.json({ ok: true });
 }
