@@ -1,30 +1,12 @@
 import { config } from "dotenv";
 import path from "path";
 import { Pool } from "pg";
+import { resolveConnectionString } from "../lib/db";
 
 // Standalone script (not run through Next.js), so environment variables
 // aren't loaded automatically — pull them from the same files Next.js would.
 config({ path: path.join(process.cwd(), ".env.local") });
 config({ path: path.join(process.cwd(), ".env") });
-
-const CONNECTION_STRING_ENV_VARS = [
-  "POSTGRES_URL",
-  "DATABASE_URL",
-  "POSTGRES_PRISMA_URL",
-  "POSTGRES_URL_NON_POOLING",
-] as const;
-
-function resolveConnectionString(): string {
-  for (const name of CONNECTION_STRING_ENV_VARS) {
-    const value = process.env[name];
-    if (value) return value;
-  }
-  throw new Error(
-    `No database connection string found. Set one of: ${CONNECTION_STRING_ENV_VARS.join(
-      ", ",
-    )} in .env.local before running the seed script.`,
-  );
-}
 
 type SeedCustomer = { id: number; name: string; email: string };
 type SeedOrder = {

@@ -3,14 +3,19 @@ import { Pool, type QueryResultRow } from "pg";
 // Vercel's dashboard names the injected connection string differently
 // depending on how Postgres storage was provisioned — check the project's
 // Storage tab / environment variables to confirm which one is actually set.
+// The STORAGE_-prefixed names are what Vercel's Supabase marketplace
+// integration injects when a custom env var prefix ("STORAGE") is used.
 const CONNECTION_STRING_ENV_VARS = [
   "POSTGRES_URL",
   "DATABASE_URL",
   "POSTGRES_PRISMA_URL",
   "POSTGRES_URL_NON_POOLING",
+  "STORAGE_POSTGRES_URL",
+  "STORAGE_POSTGRES_PRISMA_URL",
+  "STORAGE_POSTGRES_URL_NON_POOLING",
 ] as const;
 
-function resolveConnectionString(): string {
+export function resolveConnectionString(): string {
   for (const name of CONNECTION_STRING_ENV_VARS) {
     const value = process.env[name];
     if (value) return value;
