@@ -35,6 +35,7 @@ export default function PhoneOtpForm() {
       if (!res.ok) {
         throw new Error(data?.error || "Invalid phone number or OTP.");
       }
+      router.push("/dashboard");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");

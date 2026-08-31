@@ -1,8 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import type { Metadata } from "next";
 import { getSession } from "@/lib/session";
 import PhoneOtpForm from "./PhoneOtpForm";
-import LogoutButton from "./LogoutButton";
 
 export const metadata: Metadata = {
   title: "Log in — Foodly",
@@ -10,6 +10,9 @@ export const metadata: Metadata = {
 
 export default async function LoginPage() {
   const session = await getSession();
+  if (session) {
+    redirect("/dashboard");
+  }
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-6 py-20">
@@ -21,25 +24,13 @@ export default async function LoginPage() {
           >
             🍔
           </span>
-          <h1 className="text-xl font-bold">{session ? "Welcome back" : "Log in to order"}</h1>
+          <h1 className="text-xl font-bold">Log in to order</h1>
           <p className="text-sm text-foreground/60">
-            {session
-              ? "Track your orders and manage refunds."
-              : "We'll text you a one-time code to verify your number."}
+            We&apos;ll text you a one-time code to verify your number.
           </p>
         </div>
 
-        {session ? (
-          <div className="flex flex-col items-center gap-4">
-            <p className="text-sm text-foreground/70">
-              Signed in as <span className="font-semibold text-foreground">{session.name}</span> (
-              {session.phone})
-            </p>
-            <LogoutButton />
-          </div>
-        ) : (
-          <PhoneOtpForm />
-        )}
+        <PhoneOtpForm />
 
         <Link
           href="/"
