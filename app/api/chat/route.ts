@@ -3,6 +3,8 @@ import path from "path";
 import Anthropic from "@anthropic-ai/sdk";
 import { propagateAttributes, startActiveObservation } from "@langfuse/tracing";
 import { langfuseSpanProcessor } from "../../../instrumentation";
+import { getSession } from "@/lib/session";
+import { TOOL_DEFINITIONS, TOOL_HANDLERS, WRITE_TOOL_NAMES } from "@/lib/tools/orders";
 
 export const runtime = "nodejs";
 
@@ -53,6 +55,12 @@ ${policyDocument}
 """`;
 }
 
+// Appended only when the customer is logged in and order tools are on the
+// call, so logged-out behavior (including this prompt) is untouched.
+const ORDER_TOOLS_RULE = `
+
+4. Order tools: this customer is logged in, and you have tools to look up their own orders, order details, and refund status — that's real account data, not something to find in the POLICY DOCUMENT above, so use the tools for it instead of rules 1-3. Before calling the tool that cancels an order, tell the customer exactly which order you mean and that canceling it means it will not be delivered, then wait for their explicit "yes" in their very next message before calling it.`;
+
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
@@ -66,6 +74,40 @@ function isChatMessage(value: unknown): value is ChatMessage {
     typeof record.content === "string"
   );
 }
+
+function extractText(message: Anthropic.Message): string {
+  return message.content
+    .filter((block): block is Anthropic.TextBlock => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+}
+
+function usageAndCost(usage: Anthropic.Usage) {
+  const cacheCreationTokens = usage.cache_creation_input_tokens ?? 0;
+  const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+  const cost = {
+    input: usage.input_tokens * PRICE_PER_TOKEN_USD.input,
+    output: usage.output_tokens * PRICE_PER_TOKEN_USD.output,
+    cache_creation_input_tokens: cacheCreationTokens * PRICE_PER_TOKEN_USD.cacheWrite5m,
+    cache_read_input_tokens: cacheReadTokens * PRICE_PER_TOKEN_USD.cacheRead,
+  };
+  return {
+    usageDetails: {
+      input: usage.input_tokens,
+      output: usage.output_tokens,
+      cache_creation_input_tokens: cacheCreationTokens,
+      cache_read_input_tokens: cacheReadTokens,
+      total: usage.input_tokens + usage.output_tokens + cacheCreationTokens + cacheReadTokens,
+    },
+    costDetails: {
+      ...cost,
+      total: cost.input + cost.output + cost.cache_creation_input_tokens + cost.cache_read_input_tokens,
+    },
+  };
+}
+
+const MAX_TOOL_ROUNDS = 8;
 
 export async function POST(request: Request) {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
@@ -103,84 +145,137 @@ export async function POST(request: Request) {
     );
   }
 
+  // Session check up front, the same way app/dashboard/page.tsx does it —
+  // the caller is never trusted to have checked, and the tools re-check it
+  // again themselves besides.
+  const session = await getSession();
+  const hasSession = session !== null;
+  const tools = hasSession ? TOOL_DEFINITIONS : undefined;
+
   const client = new Anthropic({ apiKey });
-  const systemPrompt = buildSystemPrompt(policyDocument);
+  const basePrompt = buildSystemPrompt(policyDocument);
+  const systemPrompt = hasSession ? basePrompt + ORDER_TOOLS_RULE : basePrompt;
+  const systemBlocks: Anthropic.TextBlockParam[] = [
+    { type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } },
+  ];
 
   try {
     return await propagateAttributes(
       {
         traceName: "foodly-support-chat",
         tags: ["foodly-chat-widget"],
-        metadata: { policyDocumentChars: String(policyDocument.length) },
+        metadata: {
+          policyDocumentChars: String(policyDocument.length),
+          hasSession: String(hasSession),
+          toolsAvailable: hasSession ? TOOL_DEFINITIONS.map((tool) => tool.name).join(",") : "",
+        },
       },
       () =>
         startActiveObservation("foodly-support-chat", async (span) => {
           span.update({ input: messages });
 
-          const generation = span.startObservation(
-            "anthropic-chat-completion",
-            {
-              model: MODEL_ID,
-              modelParameters: { max_tokens: 1024 },
-              input: [{ role: "system", content: systemPrompt }, ...messages],
-            },
-            { asType: "generation" },
-          );
+          // MessageParam content can carry tool_use/tool_result blocks once
+          // the loop below appends them, unlike the plain-string ChatMessage
+          // the client speaks.
+          const conversation: Anthropic.MessageParam[] = [...messages];
+          const toolsCalled: { name: string; isWrite: boolean }[] = [];
+          let finalReply = "";
 
-          try {
-            const response = await client.messages.create({
-              model: MODEL_ID,
-              max_tokens: 1024,
-              system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-              messages,
-            });
-
-            const reply = response.content
-              .filter((block): block is Anthropic.TextBlock => block.type === "text")
-              .map((block) => block.text)
-              .join("\n")
-              .trim();
-
-            const usage = response.usage;
-            const cacheCreationTokens = usage.cache_creation_input_tokens ?? 0;
-            const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
-            const cost = {
-              input: usage.input_tokens * PRICE_PER_TOKEN_USD.input,
-              output: usage.output_tokens * PRICE_PER_TOKEN_USD.output,
-              cache_creation_input_tokens: cacheCreationTokens * PRICE_PER_TOKEN_USD.cacheWrite5m,
-              cache_read_input_tokens: cacheReadTokens * PRICE_PER_TOKEN_USD.cacheRead,
-            };
-
-            generation.update({
-              output: reply,
-              usageDetails: {
-                input: usage.input_tokens,
-                output: usage.output_tokens,
-                cache_creation_input_tokens: cacheCreationTokens,
-                cache_read_input_tokens: cacheReadTokens,
-                total: usage.input_tokens + usage.output_tokens + cacheCreationTokens + cacheReadTokens,
+          for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            const generation = span.startObservation(
+              "anthropic-chat-completion",
+              {
+                model: MODEL_ID,
+                modelParameters: { max_tokens: 1024 },
+                input: [{ role: "system", content: systemBlocks }, ...conversation],
               },
-              costDetails: {
-                ...cost,
-                total: cost.input + cost.output + cost.cache_creation_input_tokens + cost.cache_read_input_tokens,
-              },
-            });
-            generation.end();
-            span.update({ output: reply });
-
-            return Response.json({ reply });
-          } catch (error) {
-            console.error("Anthropic API request failed:", error);
-            const statusMessage = error instanceof Error ? error.message : String(error);
-            generation.update({ level: "ERROR", statusMessage });
-            generation.end();
-            span.update({ level: "ERROR", statusMessage });
-
-            return Response.json(
-              { error: "The chat assistant is temporarily unavailable. Please try again." },
-              { status: 502 },
+              { asType: "generation" },
             );
+
+            let response: Anthropic.Message;
+            try {
+              response = await client.messages.create({
+                model: MODEL_ID,
+                max_tokens: 1024,
+                system: systemBlocks,
+                messages: conversation,
+                ...(tools ? { tools } : {}),
+              });
+            } catch (error) {
+              console.error("Anthropic API request failed:", error);
+              const statusMessage = error instanceof Error ? error.message : String(error);
+              generation.update({ level: "ERROR", statusMessage });
+              generation.end();
+              span.update({ level: "ERROR", statusMessage });
+
+              return Response.json(
+                { error: "The chat assistant is temporarily unavailable. Please try again." },
+                { status: 502 },
+              );
+            }
+
+            const { usageDetails, costDetails } = usageAndCost(response.usage);
+            generation.update({ output: response.content, usageDetails, costDetails });
+            generation.end();
+
+            if (response.stop_reason !== "tool_use") {
+              finalReply = extractText(response);
+              break;
+            }
+
+            conversation.push({ role: "assistant", content: response.content });
+
+            const toolResultBlocks: Anthropic.ToolResultBlockParam[] = [];
+            for (const block of response.content) {
+              if (block.type !== "tool_use") continue;
+
+              const isWrite = WRITE_TOOL_NAMES.has(block.name);
+              toolsCalled.push({ name: block.name, isWrite });
+
+              // Named and typed distinctly for writes so any change to the
+              // database is findable in the trace on its own, separately
+              // from the read-only lookups.
+              const toolObservation = span.startObservation(
+                `tool:${isWrite ? "write" : "read"}:${block.name}`,
+                { input: block.input, metadata: { toolType: isWrite ? "write" : "read" } },
+                { asType: "tool" },
+              );
+
+              let output: unknown;
+              const handler = TOOL_HANDLERS[block.name];
+              try {
+                output = handler
+                  ? await handler(block.input)
+                  : { error: "UNKNOWN_TOOL", message: `No such tool: ${block.name}` };
+                toolObservation.update({ output });
+              } catch (error) {
+                const statusMessage = error instanceof Error ? error.message : String(error);
+                output = { error: "TOOL_ERROR", message: "Something went wrong completing that." };
+                toolObservation.update({ level: "ERROR", statusMessage, output });
+              } finally {
+                toolObservation.end();
+              }
+
+              toolResultBlocks.push({
+                type: "tool_result",
+                tool_use_id: block.id,
+                content: JSON.stringify(output),
+              });
+            }
+
+            conversation.push({ role: "user", content: toolResultBlocks });
           }
+
+          span.update({
+            output: finalReply,
+            metadata: {
+              hasSession: String(hasSession),
+              toolsAvailable: hasSession ? TOOL_DEFINITIONS.map((tool) => tool.name).join(",") : "",
+              toolsCalled: toolsCalled.map((t) => `${t.isWrite ? "write" : "read"}:${t.name}`).join(","),
+            },
+          });
+
+          return Response.json({ reply: finalReply });
         }),
     );
   } finally {
