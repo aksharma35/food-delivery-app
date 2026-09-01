@@ -15,6 +15,7 @@ type SeedOrder = {
   status: string;
   items: string;
   totalAmount: number;
+  daysAgo: number;
 };
 type SeedRefund = {
   id: number;
@@ -28,7 +29,8 @@ type SeedRefund = {
 // Order id '9999' is reserved for the on-camera "order not found" demo and
 // must never exist in this table — see the check after seeding below.
 // Phone numbers double as the demo login: any of these + the fixed
-// FOODLY_DEMO_OTP code logs in as that customer.
+// FOODLY_DEMO_OTP code logs in as that customer. Customer 1 is "me" for the
+// chat demo: 4519/4521/4523 are theirs, 4522 belongs to customer 2 instead.
 const CUSTOMERS: SeedCustomer[] = [
   { id: 1, name: "Priya Nair", email: "priya.nair@example.com", phone: "+919876543210" },
   { id: 2, name: "Marcus Lee", email: "marcus.lee@example.com", phone: "+14155550134" },
@@ -36,25 +38,52 @@ const CUSTOMERS: SeedCustomer[] = [
 
 const ORDERS: SeedOrder[] = [
   {
+    id: "4515",
+    customerId: 1,
+    status: "delivered",
+    items: "2x Paneer Wrap, 1x Cold Coffee",
+    totalAmount: 12.5,
+    daysAgo: 30,
+  },
+  {
+    id: "4517",
+    customerId: 1,
+    status: "delivered",
+    items: "1x Buddha Bowl, 1x Iced Tea",
+    totalAmount: 14.25,
+    daysAgo: 20,
+  },
+  {
+    id: "4519",
+    customerId: 1,
+    status: "delivered",
+    items: "1x Margherita Pizza, 1x Garlic Bread",
+    totalAmount: 22.0,
+    daysAgo: 10,
+  },
+  {
     id: "4521",
     customerId: 1,
     status: "delivered",
     items: "2x Paneer Wrap, 1x Cold Coffee",
     totalAmount: 18.5,
+    daysAgo: 3,
   },
   {
     id: "4522",
-    customerId: 1,
+    customerId: 2,
     status: "preparing",
     items: "1x Margherita Pizza, 1x Garlic Bread",
     totalAmount: 22.0,
+    daysAgo: 0,
   },
   {
     id: "4523",
-    customerId: 2,
-    status: "out_for_delivery",
+    customerId: 1,
+    status: "preparing",
     items: "1x Chicken Biryani, 2x Mango Lassi",
     totalAmount: 27.75,
+    daysAgo: 0,
   },
   {
     id: "4524",
@@ -62,6 +91,7 @@ const ORDERS: SeedOrder[] = [
     status: "delivered",
     items: "3x Veggie Tacos",
     totalAmount: 15.25,
+    daysAgo: 5,
   },
   {
     id: "4525",
@@ -69,6 +99,7 @@ const ORDERS: SeedOrder[] = [
     status: "preparing",
     items: "1x Double Cheeseburger, 1x Fries, 1x Cola",
     totalAmount: 16.4,
+    daysAgo: 0,
   },
 ];
 
@@ -119,6 +150,9 @@ async function main() {
         total_amount numeric not null
       );
     `);
+    await pool.query(
+      `alter table orders add column if not exists created_at timestamptz not null default now();`,
+    );
 
     await pool.query(`
       create table if not exists refunds (
@@ -128,6 +162,19 @@ async function main() {
         status text not null,
         reason text,
         amount numeric not null,
+        created_at timestamptz not null default now()
+      );
+    `);
+
+    // Written by the chat support tool's cancel action — never seeded with
+    // rows here, just guaranteed to exist before that tool runs.
+    await pool.query(`
+      create table if not exists audit_log (
+        id serial primary key,
+        order_id text not null,
+        customer_id integer not null,
+        action text not null,
+        source text not null,
         created_at timestamptz not null default now()
       );
     `);
@@ -150,14 +197,16 @@ async function main() {
       if (order.id === "9999") {
         throw new Error("Refusing to seed order id 9999 — it is reserved for the 'not found' demo.");
       }
+      const createdAt = new Date(Date.now() - order.daysAgo * 86_400_000);
       await pool.query(
-        `insert into orders (id, customer_id, status, items, total_amount) values ($1, $2, $3, $4, $5)
+        `insert into orders (id, customer_id, status, items, total_amount, created_at) values ($1, $2, $3, $4, $5, $6)
          on conflict (id) do update set
            customer_id = excluded.customer_id,
            status = excluded.status,
            items = excluded.items,
-           total_amount = excluded.total_amount`,
-        [order.id, order.customerId, order.status, order.items, order.totalAmount],
+           total_amount = excluded.total_amount,
+           created_at = excluded.created_at`,
+        [order.id, order.customerId, order.status, order.items, order.totalAmount, createdAt],
       );
     }
 
